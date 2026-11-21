@@ -119,7 +119,9 @@ function renderBoard(params) {
   <div class="method">How a price is set: <code>implied = TVL × category multiple × momentum × maturity × breadth</code>.
   The category multiple is the <strong>median market-cap ÷ TVL of the live-token protocols in the same category</strong> in this
   snapshot, shrunk toward the global median when a category has few peers and clamped to ×0.05–×2.50. Momentum reads the
-  7-day TVL change, maturity the protocol's age, breadth its chain count. <a href="#/comps">See every category's evidence</a>.</div>
+  7-day TVL change, maturity the protocol's age, breadth its chain count. Where the snapshot reports no 7-day change,
+  momentum counts as ×1.00, and where a category has no live peers the global median prices the row.
+  <a href="#/comps">See every category's evidence</a>.</div>
   <form class="filters" id="filters">
     <label>Search<input type="search" id="f-q" value="${esc(state.q)}" placeholder="Name or slug"></label>
     <label>Category<select id="f-cat"><option value="">All categories</option>${cats.map((c) => `<option ${c === state.cat ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></label>
@@ -137,7 +139,7 @@ function renderBoard(params) {
   <tbody>${rows.map((r) => `<tr data-slug="${esc(r.slug)}">
     <td class="rank">${r.rank}</td>
     <td><span class="pname">${esc(r.name)}</span>${r.watchlist ? '<span class="badge">WATCHLIST</span>' : ''}<br><span class="slug">${esc(r.slug)}</span></td>
-    <td class="cat">${esc(r.category || '—')}</td>
+    <td class="cat">${esc(r.category || '—')}<br><span class="basis">${mult(r.category_multiple)} · ${r.peers} peer${r.peers === 1 ? '' : 's'}</span></td>
     <td class="chains">${esc(chainList(r.chains, 3))}</td>
     <td class="num">${money(r.tvl_usd)}</td>
     <td class="num ${r.change_7d === null ? '' : r.change_7d >= 0 ? 'up' : 'down'}">${pct(r.change_7d)}</td>
@@ -172,6 +174,10 @@ function renderDetail(slug) {
   if (!r) { renderBoard(new URLSearchParams()); return; }
   const cat = R.categories.find((c) => c.category === (r.category || 'Uncategorised'));
   const steps = farmSteps(r);
+  const cap = capitalFor(r.tvl_usd);
+  const hold = holdDaysFor(r.age_days);
+  const setupGas = 3 + (cap >= 150 ? 8 : 4) + 3 + (r.chains.length > 1 ? 3 : 0);
+  const setupMin = 35 + (r.chains.length > 1 ? 10 : 0);
   main.innerHTML = `<p><a href="#/">← Back to the board</a></p>
   <div class="detail-head"><h1>${esc(r.name)}</h1>${r.watchlist ? '<span class="badge">WATCHLIST</span>' : '<span class="badge" style="background:#26221a;color:var(--accent2);border-color:#4a3f22">EARLY FIND</span>'}
   <span class="slug">${esc(r.slug)}</span></div>
@@ -179,17 +185,22 @@ function renderDetail(slug) {
   (no market cap, no CoinGecko id, no ticker) · tracked by DefiLlama since ${esc(r.listed_at || 'an unreported date')}.</p>
   <div class="grid">
     <div class="stat"><div class="k">Implied value</div><div class="v">${money(r.implied_value_usd)}</div><div class="n">the board's claim, from the formula below</div></div>
-    <div class="stat"><div class="k">TVL</div><div class="v">${money(r.tvl_usd)}</div><div class="n">${pct(r.change_7d)} over 7 days</div></div>
+    <div class="stat"><div class="k">TVL</div><div class="v">${money(r.tvl_usd)}</div><div class="n">${r.change_7d === null ? '7-day change not reported' : `${pct(r.change_7d)} over 7 days`}</div></div>
     <div class="stat"><div class="k">Chains</div><div class="v">${r.chains.length}</div><div class="n">${esc(chainList(r.chains, 6))}</div></div>
     <div class="stat"><div class="k">Age</div><div class="v">${r.age_days === null ? '—' : `${r.age_days}d`}</div><div class="n">listed ${esc(r.listed_at || 'unreported')}</div></div>
   </div>
+  <div class="planstrip"><span class="pk">Farm plan · ${steps.length} steps</span>
+  <span>Capital <b>$${cap}</b>, held in the position</span>
+  <span>Set up <b>~${setupMin} min</b> · about <b>$${setupGas}</b> of gas</span>
+  <span>Then <b>10 min a week</b> · about <b>$2</b> of gas</span>
+  <span>Hold <b>at least ${hold} days</b></span></div>
   <h2>Why this value</h2>
   <div class="why">
     <div class="eq">${money(r.tvl_usd)} × ${mult(r.category_multiple)} × ${mult(r.momentum_multiplier)} × ${mult(r.maturity_multiplier)} × ${mult(r.breadth_multiplier)} = ${money(r.implied_value_usd)}</div>
     <table><tbody>
     <tr><td>TVL ${money(r.tvl_usd)}</td><td>The protocol's total value locked in the snapshot, the base every price starts from.</td></tr>
     <tr><td>category multiple ${mult(r.category_multiple)}</td><td>${cat ? `The ${esc(cat.category)} multiple: ${cat.peers} live-token peer${cat.peers === 1 ? '' : 's'} in this snapshot trade at a median market-cap ÷ TVL of ${mult(cat.median_multiple)}, shrunk toward the global median ${mult(R.global_multiple)} to the ${mult(cat.used_multiple)} used here.` : `No live-token peers in its category in this snapshot, so the global median multiple ${mult(R.global_multiple)} prices it.`}</td></tr>
-    <tr><td>momentum ${mult(r.momentum_multiplier)}</td><td>Its TVL moved ${pct(r.change_7d)} in the seven days before the snapshot; the model credits 35% of that move, clamped between −50% and +100%.</td></tr>
+    <tr><td>momentum ${mult(r.momentum_multiplier)}</td><td>${r.change_7d === null ? 'The snapshot reports no 7-day TVL change for it, so momentum counts as ×1.00: the model credits no move it cannot see.' : `Its TVL moved ${pct(r.change_7d)} in the seven days before the snapshot; the model credits 35% of that move, clamped between −50% and +100%.`}</td></tr>
     <tr><td>maturity ${mult(r.maturity_multiplier)}</td><td>${r.age_days === null ? 'The snapshot reports no listing date, so the model counts it as 365 days old.' : `Tracked for ${r.age_days} days; the factor runs from ×0.75 for a brand-new protocol to ×1.10 at three years.`}</td></tr>
     <tr><td>breadth ${mult(r.breadth_multiplier)}</td><td>Live on ${r.chains.length} chain${r.chains.length === 1 ? '' : 's'}; each chain past the first adds 3%, up to seven.</td></tr>
     </tbody></table>
@@ -198,6 +209,8 @@ function renderDetail(slug) {
   <p class="note">A plan for positioning before any launch, sized from the protocol's own TVL and paced by its age.
   It assumes no points programme exists unless the protocol's own page says so, and it never requires trusting a third-party link.</p>
   <ol class="steps">${steps.map((s) => `<li>${esc(s.text)}<span class="meta">Cost: ${esc(s.cost)} · Time: ${esc(s.time)}</span></li>`).join('')}</ol>
+  <p class="note">All in: about <strong>$${setupGas} of gas and ${setupMin} minutes</strong> to set up, about <strong>$2 of gas and
+  10 minutes a week</strong> after that, and <strong>$${cap} of capital</strong> held in the position for at least ${hold} days.</p>
   <h2>The snapshot record</h2>
   <p class="kv">slug ${esc(r.slug)} · category ${esc(r.category || 'null')} · tvl_usd ${r.tvl_usd} · change_7d ${r.change_7d === null ? 'null' : r.change_7d} ·
   mcap_usd null · listed_at ${esc(r.listed_at || 'null')} · gecko_id null · symbol null · chains [${esc(r.chains.join(', '))}]</p>
